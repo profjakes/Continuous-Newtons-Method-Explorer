@@ -1,0 +1,1531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cayley Explorer — Approximations of Continuous Newton's Method</title>
+<style>
+  :root {
+    --bg: #0c0d10;
+    --panel: #16181d;
+    --panel-2: #1f232a;
+    --border: #2a2f38;
+    --text: #e8eaed;
+    --muted: #8e95a3;
+    --accent: #7aa2ff;
+    --accent-2: #ff9d7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px; height: 100%; }
+  header { padding: 14px 22px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 0 4px 0; font-size: 18px; font-weight: 600; letter-spacing: 0.2px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  header p code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px; align-items: start; }
+  #canvas-wrap { position: relative; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #canvas-holder { position: relative; }
+  canvas { display: block; background: #000; border-radius: 4px;
+    image-rendering: pixelated; max-width: 100%; height: auto; }
+  canvas#fractal { cursor: crosshair; }
+  canvas#overlay { position: absolute; top: 0; left: 0; pointer-events: none;
+    background: transparent; }
+  #hud { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  #hud span b { color: var(--text); font-weight: 500; }
+  aside { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 110px);
+    overflow-y: auto; position: sticky; top: 16px; }
+  fieldset { border: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  legend, .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
+    color: var(--muted); font-weight: 600; padding: 0; }
+  select, input[type="text"], input[type="number"] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 7px 9px; font-size: 13px; width: 100%;
+    font-family: inherit; }
+  input[type="range"] { width: 100%; }
+  button { background: var(--accent); color: #0c0d10; border: none; border-radius: 5px;
+    padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  button:hover { background: #95b5ff; }
+  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.secondary:hover { background: #2a2f38; }
+  .row { display: flex; gap: 6px; }
+  .row > * { flex: 1; }
+  .slider-row { display: flex; align-items: center; gap: 10px; }
+  .slider-row input[type="range"] { flex: 1; }
+  .slider-row span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; color: var(--text); min-width: 52px; text-align: right; }
+  #status { font-size: 12px; color: var(--muted); min-height: 16px; }
+  #legend { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+  #legend .item { display: flex; align-items: center; gap: 8px; }
+  #legend .swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+  details { background: var(--panel-2); border-radius: 5px; padding: 8px 10px; font-size: 12px; color: var(--muted); }
+  details summary { cursor: pointer; color: var(--text); }
+  details p { margin: 8px 0 4px; }
+  details code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .hint { font-size: 11px; color: var(--muted); }
+  small { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Cayley Explorer — Approximations of Continuous Newton's Method</h1>
+  <p>Different numerical schemes for the ODE <code>z'(t) = −p(z)/p'(z)</code> yield different fractal basins. Pick a polynomial, a method, and a step size <i>h</i>. Based on Jacobsen, Lewis &amp; Tennis (2007).</p>
+</header>
+
+<main>
+  <section id="canvas-wrap">
+    <div id="canvas-holder">
+      <canvas id="fractal" width="600" height="600"></canvas>
+      <canvas id="overlay" width="600" height="600"></canvas>
+    </div>
+    <div id="hud">
+      <span>z = <b id="hud-z">—</b></span>
+      <span>view: <b id="hud-view">—</b></span>
+      <span><b id="hud-time">—</b></span>
+    </div>
+  </section>
+
+  <aside>
+    <fieldset>
+      <div class="label">Polynomial p(z)</div>
+      <select id="poly-preset">
+        <option value="z3-1">z³ − 1  (the classic Cayley cubic)</option>
+        <option value="z4-1">z⁴ − 1</option>
+        <option value="z5-1">z⁵ − 1</option>
+        <option value="z6-1">z⁶ − 1</option>
+        <option value="cubic-trap">z³ − 2z + 2  (Newton's trap)</option>
+        <option value="z3-z">z³ − z</option>
+        <option value="z2-1">z² − 1</option>
+        <option value="custom">Custom: enter roots…</option>
+      </select>
+      <input id="custom-roots" type="text"
+        placeholder="e.g. 1, -0.5+0.866i, -0.5-0.866i" disabled>
+      <small class="hint">Roots are comma-separated complex numbers. <i>i</i> for imaginary unit.</small>
+    </fieldset>
+
+    <fieldset>
+      <div class="label">Discretization method</div>
+      <select id="method">
+        <option value="euler">Euler  (Damped Newton)</option>
+        <option value="refined-euler">Refined Euler  (midpoint)</option>
+        <option value="heun">Heun's method  (trapezoidal)</option>
+        <option value="rk2">Runge–Kutta, order 2 (optimal)</option>
+        <option value="rk4">Runge–Kutta, order 4</option>
+        <option value="ab2">Adams–Bashforth, order 2</option>
+      </select>
+    </fieldset>
+
+    <fieldset>
+      <div class="label">Step size h</div>
+      <div class="slider-row">
+        <input id="step-size" type="range" min="0.05" max="1.999" step="0.001" value="1.000">
+        <span id="step-size-value">1.000</span>
+      </div>
+      <small class="hint">h = 1 recovers classical Newton (with Euler). h → 0 sharpens to the true flow; h ≥ 2 makes roots repelling.</small>
+    </fieldset>
+
+    <fieldset>
+      <div class="label">Iterations &amp; tolerance</div>
+      <div class="row">
+        <div>
+          <small>max iter</small>
+          <input id="max-iter" type="number" min="20" max="2000" value="200">
+        </div>
+        <div>
+          <small>tol (10⁻ⁿ)</small>
+          <input id="tol-exp" type="number" min="3" max="14" value="6">
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <div class="label">Resolution &amp; engine</div>
+      <select id="resolution">
+        <option value="300">300 × 300</option>
+        <option value="500" selected>500 × 500</option>
+        <option value="800">800 × 800</option>
+        <option value="1024">1024 × 1024</option>
+        <option value="1536">1536 × 1536  (GPU)</option>
+        <option value="2048">2048 × 2048  (GPU)</option>
+      </select>
+      <select id="engine">
+        <option value="auto" selected>Auto (GPU if available)</option>
+        <option value="gpu">GPU (WebGL2)</option>
+        <option value="cpu">CPU (better for deep zoom)</option>
+      </select>
+      <select id="ssaa" title="Supersampling antialiasing — averages multiple subpixel samples to smooth basin boundaries.">
+        <option value="1">no AA  (1× — fastest)</option>
+        <option value="2" selected>SSAA 2× (4 samples — recommended)</option>
+        <option value="3">SSAA 3× (9 samples)</option>
+        <option value="4">SSAA 4× (16 samples — slow)</option>
+      </select>
+      <small class="hint" id="engine-status">—</small>
+    </fieldset>
+
+    <fieldset>
+      <div class="label">View</div>
+      <div class="row">
+        <button class="secondary" id="reset-view">Reset</button>
+        <button class="secondary" id="zoom-out">Zoom out 2×</button>
+      </div>
+      <small class="hint">Drag a box on the canvas → zoom into that region. Click without dragging → zoom 2× at point. Shift-click → zoom out. Alt-drag to pan.</small>
+    </fieldset>
+
+    <fieldset>
+      <div class="label">Animate over h</div>
+      <div class="row">
+        <div>
+          <small>h start</small>
+          <input id="h-start" type="number" min="0" max="2" step="0.01" value="0.20">
+        </div>
+        <div>
+          <small>h end</small>
+          <input id="h-end" type="number" min="0" max="2" step="0.01" value="1.80">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <small>duration (s)</small>
+          <input id="anim-duration" type="number" min="1" max="120" step="0.5" value="10">
+        </div>
+        <div>
+          <small>mode</small>
+          <select id="anim-mode">
+            <option value="once" selected>once (h₀ → h₁)</option>
+            <option value="forward">forward loop (wraps)</option>
+            <option value="loop">ping-pong (back and forth)</option>
+          </select>
+        </div>
+      </div>
+      <div class="slider-row">
+        <input id="anim-scrub" type="range" min="0" max="1" step="0.001" value="0">
+        <span id="anim-scrub-value">h=—</span>
+      </div>
+      <div class="row">
+        <button class="secondary" id="anim-play">▶ Play</button>
+        <button class="secondary" id="anim-stop">■ Stop</button>
+      </div>
+      <div class="row">
+        <div>
+          <small>recording resolution</small>
+          <select id="record-resolution">
+            <option value="300">300 × 300</option>
+            <option value="500">500 × 500</option>
+            <option value="800" selected>800 × 800  (recommended)</option>
+            <option value="1024">1024 × 1024</option>
+            <option value="1536">1536 × 1536</option>
+            <option value="2048">2048 × 2048</option>
+            <option value="match">match preview</option>
+          </select>
+        </div>
+        <div>
+          <small>fps</small>
+          <input id="record-fps" type="number" min="6" max="60" step="1" value="24">
+        </div>
+      </div>
+      <div class="row">
+        <button class="secondary" id="record-video">⬤ Record video</button>
+        <button class="secondary" id="capture-frames">Frames → ZIP</button>
+      </div>
+      <small class="hint">Both export buttons follow the selected <i>mode</i>: <b>once</b> sweeps h₀ → h₁ a single time (usual choice), <b>ping-pong</b> goes h₀ → h₁ → h₀ for a seamless loop, <b>forward</b> wraps. Video output is WebM (or MP4 in Safari). For smooth playback each render must finish in &lt; 1/fps s — drop recording resolution if the result looks frozen.</small>
+    </fieldset>
+
+    <button id="render-btn">Render</button>
+
+    <div id="status"></div>
+    <div id="legend"></div>
+
+    <details>
+      <summary>About the math</summary>
+      <p>Continuous Newton's Method is the ODE <code>z'(t) = −p(z)/p'(z)</code>. Trajectories satisfy <code>p(z(t)) = p(z₀)·e⁻ᵗ</code>, so they flow to a root while <code>arg p(z)</code> is preserved.</p>
+      <p>Cayley's classical map <code>z ↦ z − p/p'</code> is just the Euler step (h = 1). This app applies six different ODE schemes — Euler, Refined Euler, Heun, RK2 (optimal), RK4, and 2-step Adams–Bashforth — and colours each pixel by which root the orbit converges to. Brighter = faster convergence; black = no convergence within max iterations.</p>
+      <p>Reference: J. Jacobsen, O. Lewis, B. Tennis, "Approximations of Continuous Newton's Method: An Extension of Cayley's Problem," <i>EJDE</i> Conf. 15 (2007), pp. 163–173.</p>
+    </details>
+  </aside>
+</main>
+
+<script>
+// ---------- Complex arithmetic (z = [re, im]) ----------
+const C = {
+  add: (a, b) => [a[0]+b[0], a[1]+b[1]],
+  sub: (a, b) => [a[0]-b[0], a[1]-b[1]],
+  mul: (a, b) => [a[0]*b[0]-a[1]*b[1], a[0]*b[1]+a[1]*b[0]],
+  div: (a, b) => {
+    const d = b[0]*b[0] + b[1]*b[1];
+    return [(a[0]*b[0]+a[1]*b[1])/d, (a[1]*b[0]-a[0]*b[1])/d];
+  },
+  scale: (s, a) => [s*a[0], s*a[1]],
+  neg: a => [-a[0], -a[1]],
+  abs2: a => a[0]*a[0]+a[1]*a[1],
+};
+
+// ---------- Polynomial helpers ----------
+// coeffs are arrays of complex numbers, c[0] + c[1] z + ... + c[n] zⁿ
+function polyFromRoots(roots) {
+  let coeffs = [[1, 0]];
+  for (const r of roots) {
+    const out = Array.from({length: coeffs.length + 1}, () => [0, 0]);
+    for (let i = 0; i < coeffs.length; i++) {
+      const c = coeffs[i];
+      // multiply by (z - r): contribute -r*c to position i, c to position i+1
+      out[i] = C.sub(out[i], C.mul(r, c));
+      out[i+1] = C.add(out[i+1], c);
+    }
+    coeffs = out;
+  }
+  return coeffs;
+}
+function polyDeriv(coeffs) {
+  const out = [];
+  for (let i = 1; i < coeffs.length; i++) out.push(C.scale(i, coeffs[i]));
+  return out.length ? out : [[0,0]];
+}
+function polyEval(coeffs, z) {
+  let r = coeffs[coeffs.length - 1];
+  for (let i = coeffs.length - 2; i >= 0; i--) {
+    r = C.add(C.mul(r, z), coeffs[i]);
+  }
+  return r;
+}
+
+// ---------- Parse user roots input ----------
+function parseComplex(s) {
+  s = s.trim().replace(/\s+/g, '');
+  if (!s) return null;
+  // Match patterns like:  3,  -2.5,  1+2i,  -1-3.4i,  i,  -i,  2i
+  const m = s.match(/^(-?\d*\.?\d*)?([+-]?\d*\.?\d*)?i?$/);
+  // Use a more permissive parse: split into real and imag parts by hand.
+  // Try: pure imaginary?
+  if (/^[+-]?i$/.test(s))   return [0, s.startsWith('-') ? -1 : 1];
+  if (/^[+-]?\d*\.?\d+i$/.test(s)) {
+    const v = s.replace('i','');
+    return [0, v === '' || v === '+' ? 1 : v === '-' ? -1 : parseFloat(v)];
+  }
+  // Pure real?
+  if (/^[+-]?\d*\.?\d+$/.test(s)) return [parseFloat(s), 0];
+  // a±bi
+  const m2 = s.match(/^([+-]?\d*\.?\d+)([+-]\d*\.?\d*)i$/);
+  if (m2) {
+    let im = m2[2];
+    if (im === '+' || im === '') im = 1;
+    else if (im === '-') im = -1;
+    else im = parseFloat(im);
+    return [parseFloat(m2[1]), im];
+  }
+  return null;
+}
+function parseRoots(input) {
+  const parts = input.split(',');
+  const roots = [];
+  for (const p of parts) {
+    const c = parseComplex(p);
+    if (!c) throw new Error('Bad root: "' + p.trim() + '"');
+    roots.push(c);
+  }
+  return roots;
+}
+
+// ---------- Numerical roots via Durand–Kerner ----------
+// (Used to find roots of arbitrary polynomial when needed; for presets we know roots exactly.)
+function durandKerner(coeffs, maxIter=200, tol=1e-12) {
+  const n = coeffs.length - 1;
+  const lead = coeffs[n];
+  // Normalize so leading coeff = 1
+  const a = coeffs.map(c => C.div(c, lead));
+  // Initial guesses: distinct points around unit circle
+  const seeds = [];
+  for (let k = 0; k < n; k++) {
+    const theta = 2*Math.PI*k/n + 0.4;
+    seeds.push([0.9*Math.cos(theta), 0.9*Math.sin(theta)]);
+  }
+  for (let iter = 0; iter < maxIter; iter++) {
+    let maxDelta = 0;
+    for (let i = 0; i < n; i++) {
+      const num = polyEval(a, seeds[i]);
+      let den = [1, 0];
+      for (let j = 0; j < n; j++) if (j !== i) den = C.mul(den, C.sub(seeds[i], seeds[j]));
+      const delta = C.div(num, den);
+      seeds[i] = C.sub(seeds[i], delta);
+      maxDelta = Math.max(maxDelta, C.abs2(delta));
+    }
+    if (maxDelta < tol*tol) break;
+  }
+  return seeds;
+}
+
+// ---------- Polynomial presets ----------
+function rootsOfUnity(n, scale=1) {
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    out.push([scale*Math.cos(2*Math.PI*k/n), scale*Math.sin(2*Math.PI*k/n)]);
+  }
+  return out;
+}
+const PRESETS = {
+  'z3-1':       { roots: rootsOfUnity(3),  label: 'z³ − 1' },
+  'z4-1':       { roots: rootsOfUnity(4),  label: 'z⁴ − 1' },
+  'z5-1':       { roots: rootsOfUnity(5),  label: 'z⁵ − 1' },
+  'z6-1':       { roots: rootsOfUnity(6),  label: 'z⁶ − 1' },
+  'z2-1':       { roots: [[1,0],[-1,0]],   label: 'z² − 1' },
+  'z3-z':       { roots: [[0,0],[1,0],[-1,0]], label: 'z³ − z' },
+  'cubic-trap': { roots: null, coeffs: [[2,0],[-2,0],[0,0],[1,0]], label: 'z³ − 2z + 2' },
+};
+
+// ---------- Iterative integration steps ----------
+function makeF(poly, derv) {
+  return z => {
+    const p = polyEval(poly, z);
+    const dp = polyEval(derv, z);
+    if (C.abs2(dp) < 1e-30) return [0, 0];
+    return C.neg(C.div(p, dp));
+  };
+}
+
+// Each step function returns { z: newZ, prev?: stateForNextStep }.
+function stepEuler(F, z, h)        { return { z: C.add(z, C.scale(h, F(z))) }; }
+function stepRefinedEuler(F, z, h) {
+  const k1 = F(z);
+  const k2 = F(C.add(z, C.scale(h/2, k1)));
+  return { z: C.add(z, C.scale(h, k2)) };
+}
+function stepHeun(F, z, h) {
+  const k1 = F(z);
+  const k2 = F(C.add(z, C.scale(h, k1)));
+  return { z: C.add(z, C.scale(h/2, C.add(k1, k2))) };
+}
+function stepRK2(F, z, h) {
+  const k1 = F(z);
+  const k2 = F(C.add(z, C.scale(2*h/3, k1)));
+  return { z: C.add(z, C.scale(h/4, C.add(k1, C.scale(3, k2)))) };
+}
+function stepRK4(F, z, h) {
+  const k1 = C.scale(h, F(z));
+  const k2 = C.scale(h, F(C.add(z, C.scale(0.5, k1))));
+  const k3 = C.scale(h, F(C.add(z, C.scale(0.5, k2))));
+  const k4 = C.scale(h, F(C.add(z, k3)));
+  const sum = C.add(C.add(k1, C.scale(2, k2)), C.add(C.scale(2, k3), k4));
+  return { z: C.add(z, C.scale(1/6, sum)) };
+}
+// Adams–Bashforth needs prev value of F. First step bootstrapped by RK2.
+function stepAB2(F, z, h, prev) {
+  const fCur = F(z);
+  if (!prev) {
+    // bootstrap with RK2
+    const k2 = F(C.add(z, C.scale(2*h/3, fCur)));
+    const zNew = C.add(z, C.scale(h/4, C.add(fCur, C.scale(3, k2))));
+    return { z: zNew, prev: { F: fCur } };
+  }
+  const stepVec = C.sub(C.scale(1.5, fCur), C.scale(0.5, prev.F));
+  return { z: C.add(z, C.scale(h, stepVec)), prev: { F: fCur } };
+}
+
+function getStepFn(name) {
+  switch (name) {
+    case 'euler': return stepEuler;
+    case 'refined-euler': return stepRefinedEuler;
+    case 'heun': return stepHeun;
+    case 'rk2': return stepRK2;
+    case 'rk4': return stepRK4;
+    case 'ab2': return stepAB2;
+  }
+}
+
+// ---------- Iterate one seed to convergence ----------
+function iterateSeed(stepFn, isAB2, F, z0, h, roots, tol2, maxIter) {
+  let z = z0;
+  let prev = null;
+  for (let i = 0; i < maxIter; i++) {
+    // Convergence test: closest root within tol?
+    for (let j = 0; j < roots.length; j++) {
+      const dx = z[0] - roots[j][0];
+      const dy = z[1] - roots[j][1];
+      if (dx*dx + dy*dy < tol2) return { rootIdx: j, iters: i };
+    }
+    if (!isFinite(z[0]) || !isFinite(z[1]) || C.abs2(z) > 1e16) {
+      return { rootIdx: -1, iters: i };
+    }
+    const out = isAB2 ? stepFn(F, z, h, prev) : stepFn(F, z, h);
+    z = out.z;
+    if (isAB2) prev = out.prev;
+  }
+  return { rootIdx: -1, iters: maxIter };
+}
+
+// ---------- Color generation ----------
+function hslToRgb(h, s, l) {
+  // h in [0,360], s & l in [0,1]
+  s /= 1; l /= 1;
+  const C_ = (1 - Math.abs(2*l - 1)) * s;
+  const X = C_ * (1 - Math.abs(((h/60) % 2) - 1));
+  const m = l - C_/2;
+  let r=0, g=0, b=0;
+  if      (h < 60)  { r=C_; g=X; }
+  else if (h < 120) { r=X;  g=C_; }
+  else if (h < 180) { g=C_; b=X; }
+  else if (h < 240) { g=X;  b=C_; }
+  else if (h < 300) { r=X;  b=C_; }
+  else              { r=C_; b=X; }
+  return [Math.round((r+m)*255), Math.round((g+m)*255), Math.round((b+m)*255)];
+}
+
+function buildPalette(numRoots, maxIter) {
+  // Pre-compute for each (rootIdx, iters) → rgb
+  // Fast-converging interior: vivid mid-tone (lightness ~0.5, sat ~0.85).
+  // Slow / boundary: progressively darker, slightly desaturated.
+  // Convergence is fast in most basins, so we compress the iteration→t curve
+  // (sqrt) so subtle differences in iteration count are visible inside basins.
+  const palette = [];
+  for (let r = 0; r < numRoots; r++) {
+    const hue = (r / numRoots) * 360;
+    const row = new Uint8Array(maxIter * 3);
+    for (let it = 0; it < maxIter; it++) {
+      const t = Math.sqrt(it / Math.max(1, maxIter - 1));   // perceptual ramp
+      const lightness = 0.55 - t*0.40;                       // 0.55 → 0.15
+      const sat       = 0.88 - t*0.20;                       // 0.88 → 0.68
+      const [R,G,B] = hslToRgb(hue, sat, Math.max(0.06, lightness));
+      row[3*it]   = R;
+      row[3*it+1] = G;
+      row[3*it+2] = B;
+    }
+    palette.push(row);
+  }
+  return palette;
+}
+
+// ---------- DOM refs (canvas is mutable: we recreate it when switching engines) ----------
+let canvas = document.getElementById('fractal');
+const overlay = document.getElementById('overlay');
+const octx = overlay.getContext('2d');
+let ctx = null;             // 2D context (CPU mode)
+let gl = null;              // WebGL2 context (GPU mode)
+let glState = null;         // { prog, vao, u: {uniform locations} }
+let currentEngine = null;   // 'gpu' or 'cpu'
+
+function syncOverlayToFractal() {
+  overlay.width = canvas.width;
+  overlay.height = canvas.height;
+  overlay.style.width = canvas.style.width;
+  overlay.style.height = canvas.style.height;
+}
+
+let renderState = { abort: false };
+let view = { xmin: -1.5, xmax: 1.5, ymin: -1.5, ymax: 1.5 };
+
+// ---------- WebGL2: vertex + fragment shader source ----------
+const VS_SRC = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+const FS_SRC = `#version 300 es
+precision highp float;
+
+#define MAX_DEG 16
+
+uniform vec2  uXBounds;
+uniform vec2  uYBounds;
+uniform vec2  uResolution;
+uniform int   uPolyDeg;
+uniform vec2  uPolyCoeffs[MAX_DEG + 1];
+uniform vec2  uDervCoeffs[MAX_DEG];
+uniform int   uNumRoots;
+uniform vec2  uRoots[MAX_DEG];
+uniform vec3  uRootColors[MAX_DEG];
+uniform int   uMethod;
+uniform float uH;
+uniform int   uMaxIter;
+uniform float uTol2;
+uniform int   uSS;            // supersampling factor (1..4)
+
+out vec4 fragColor;
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+vec2 cdiv(vec2 a, vec2 b) {
+  float d = dot(b, b);
+  return vec2(a.x*b.x + a.y*b.y, a.y*b.x - a.x*b.y) / d;
+}
+
+vec2 evalP(vec2 z) {
+  vec2 r = vec2(0.0);
+  for (int i = MAX_DEG; i >= 0; i--) {
+    if (i > uPolyDeg) continue;
+    r = (i == uPolyDeg) ? uPolyCoeffs[i] : (cmul(r, z) + uPolyCoeffs[i]);
+  }
+  return r;
+}
+vec2 evalDp(vec2 z) {
+  if (uPolyDeg < 1) return vec2(0.0);
+  int dDeg = uPolyDeg - 1;
+  vec2 r = vec2(0.0);
+  for (int i = MAX_DEG - 1; i >= 0; i--) {
+    if (i > dDeg) continue;
+    r = (i == dDeg) ? uDervCoeffs[i] : (cmul(r, z) + uDervCoeffs[i]);
+  }
+  return r;
+}
+vec2 fField(vec2 z) {
+  vec2 p  = evalP(z);
+  vec2 dp = evalDp(z);
+  if (dot(dp, dp) < 1.0e-30) return vec2(0.0);
+  return -cdiv(p, dp);
+}
+
+// Iterate one seed and return its colour (vec3). Returns black if the orbit
+// failed to converge within uMaxIter iterations.
+vec3 computeColor(vec2 z0) {
+  vec2 z = z0;
+  vec2 prevF = vec2(0.0);
+  bool hasPrev = false;
+  int  rootIdx = -1;
+  int  convergedAt = uMaxIter;
+
+  for (int iter = 0; iter < 2048; iter++) {
+    if (iter >= uMaxIter) break;
+
+    int found = -1;
+    for (int j = 0; j < MAX_DEG; j++) {
+      if (j >= uNumRoots) break;
+      vec2 d = z - uRoots[j];
+      if (dot(d, d) < uTol2) { found = j; break; }
+    }
+    if (found >= 0) { rootIdx = found; convergedAt = iter; break; }
+    if (any(isnan(z)) || any(isinf(z)) || dot(z, z) > 1.0e16) break;
+
+    if (uMethod == 0) {                      // Euler
+      z = z + uH * fField(z);
+    } else if (uMethod == 1) {               // Refined Euler
+      vec2 k1 = fField(z);
+      vec2 k2 = fField(z + (uH * 0.5) * k1);
+      z = z + uH * k2;
+    } else if (uMethod == 2) {               // Heun
+      vec2 k1 = fField(z);
+      vec2 k2 = fField(z + uH * k1);
+      z = z + (uH * 0.5) * (k1 + k2);
+    } else if (uMethod == 3) {               // RK2 (optimal)
+      vec2 k1 = fField(z);
+      vec2 k2 = fField(z + (2.0 * uH / 3.0) * k1);
+      z = z + (uH * 0.25) * (k1 + 3.0 * k2);
+    } else if (uMethod == 4) {               // RK4
+      vec2 k1 = uH * fField(z);
+      vec2 k2 = uH * fField(z + 0.5 * k1);
+      vec2 k3 = uH * fField(z + 0.5 * k2);
+      vec2 k4 = uH * fField(z + k3);
+      z = z + (k1 + 2.0*k2 + 2.0*k3 + k4) / 6.0;
+    } else {                                  // Adams–Bashforth (2)
+      vec2 fCur = fField(z);
+      if (!hasPrev) {
+        vec2 k2 = fField(z + (2.0 * uH / 3.0) * fCur);
+        z = z + (uH * 0.25) * (fCur + 3.0 * k2);
+      } else {
+        z = z + uH * (1.5 * fCur - 0.5 * prevF);
+      }
+      prevF = fCur;
+      hasPrev = true;
+    }
+  }
+
+  if (rootIdx < 0) return vec3(0.0);
+  float t = sqrt(float(convergedAt) / max(1.0, float(uMaxIter - 1)));
+  return uRootColors[rootIdx] * mix(1.0, 0.27, t);
+}
+
+void main() {
+  // Supersampling antialias: average uSS×uSS subpixel samples, equally spaced
+  // across the pixel cell. Smooths the otherwise jagged basin boundaries.
+  vec3 sum = vec3(0.0);
+  float invSS = 1.0 / float(uSS);
+  for (int sy = 0; sy < 4; sy++) {
+    if (sy >= uSS) break;
+    for (int sx = 0; sx < 4; sx++) {
+      if (sx >= uSS) break;
+      vec2 sub = (vec2(float(sx), float(sy)) + 0.5) * invSS;   // in (0,1)
+      vec2 frag = gl_FragCoord.xy - 0.5 + sub;                 // pixel-relative
+      float u = frag.x / uResolution.x;
+      float v = frag.y / uResolution.y;
+      vec2 z = vec2(
+        uXBounds.x + u * (uXBounds.y - uXBounds.x),
+        uYBounds.x + v * (uYBounds.y - uYBounds.x)
+      );
+      sum += computeColor(z);
+    }
+  }
+  fragColor = vec4(sum / float(uSS * uSS), 1.0);
+}
+`;
+
+function compileShader(g, src, type) {
+  const sh = g.createShader(type);
+  g.shaderSource(sh, src);
+  g.compileShader(sh);
+  if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) {
+    const log = g.getShaderInfoLog(sh);
+    g.deleteShader(sh);
+    throw new Error('Shader compile error: ' + log);
+  }
+  return sh;
+}
+
+function setupWebGL(g) {
+  const vs = compileShader(g, VS_SRC, g.VERTEX_SHADER);
+  const fs = compileShader(g, FS_SRC, g.FRAGMENT_SHADER);
+  const prog = g.createProgram();
+  g.attachShader(prog, vs);
+  g.attachShader(prog, fs);
+  g.linkProgram(prog);
+  if (!g.getProgramParameter(prog, g.LINK_STATUS)) {
+    throw new Error('Program link error: ' + g.getProgramInfoLog(prog));
+  }
+  // Quad covering clip space
+  const buf = g.createBuffer();
+  g.bindBuffer(g.ARRAY_BUFFER, buf);
+  g.bufferData(g.ARRAY_BUFFER,
+    new Float32Array([-1, -1,  1, -1,  -1, 1,  1, 1]),
+    g.STATIC_DRAW);
+  const aPos = g.getAttribLocation(prog, 'aPos');
+  const vao = g.createVertexArray();
+  g.bindVertexArray(vao);
+  g.bindBuffer(g.ARRAY_BUFFER, buf);
+  g.enableVertexAttribArray(aPos);
+  g.vertexAttribPointer(aPos, 2, g.FLOAT, false, 0, 0);
+  // Cache uniform locations
+  const u = {};
+  for (const n of ['uXBounds','uYBounds','uResolution','uPolyDeg','uPolyCoeffs',
+                   'uDervCoeffs','uNumRoots','uRoots','uRootColors','uMethod',
+                   'uH','uMaxIter','uTol2','uSS']) {
+    u[n] = g.getUniformLocation(prog, n);
+  }
+  return { prog, vao, u };
+}
+
+// ---------- Engine switching: requires recreating the canvas element ----------
+function recreateCanvas() {
+  const old = canvas;
+  const fresh = document.createElement('canvas');
+  fresh.id = 'fractal';
+  fresh.width  = old.width;
+  fresh.height = old.height;
+  fresh.style.cssText = old.style.cssText;
+  old.parentNode.replaceChild(fresh, old);
+  canvas = fresh;
+  ctx = null; gl = null; glState = null;
+  attachCanvasHandlers();
+  syncOverlayToFractal();
+}
+
+function ensureEngine(prefer) {
+  let target = (prefer === 'auto') ? 'gpu' : prefer;
+  // Already on the requested engine?
+  if (currentEngine === target && ((target === 'gpu' && gl) || (target === 'cpu' && ctx))) {
+    return currentEngine;
+  }
+  recreateCanvas();
+  if (target === 'gpu') {
+    gl = canvas.getContext('webgl2', {
+      antialias: false,
+      preserveDrawingBuffer: true,
+      premultipliedAlpha: false,
+    });
+    if (gl) {
+      try {
+        glState = setupWebGL(gl);
+        currentEngine = 'gpu';
+        setEngineStatus('GPU (WebGL2) — fast, float32 precision');
+        return 'gpu';
+      } catch (e) {
+        console.error('WebGL setup failed:', e);
+        setEngineStatus('WebGL init failed; using CPU.');
+        recreateCanvas();
+      }
+    } else {
+      setEngineStatus('WebGL2 not available; using CPU.');
+    }
+    target = 'cpu';
+  }
+  ctx = canvas.getContext('2d');
+  currentEngine = 'cpu';
+  if (prefer === 'cpu') setEngineStatus('CPU — slower but full float64 precision');
+  return 'cpu';
+}
+
+function setEngineStatus(msg) {
+  const el = document.getElementById('engine-status');
+  if (el) el.textContent = msg;
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+function setHudView() {
+  document.getElementById('hud-view').textContent =
+    `[${view.xmin.toFixed(3)}, ${view.xmax.toFixed(3)}] × [${view.ymin.toFixed(3)}, ${view.ymax.toFixed(3)}]`;
+}
+
+function getCurrentRoots() {
+  const presetKey = document.getElementById('poly-preset').value;
+  if (presetKey === 'custom') {
+    const txt = document.getElementById('custom-roots').value;
+    return parseRoots(txt);
+  }
+  const preset = PRESETS[presetKey];
+  if (preset.roots) return preset.roots;
+  // compute via Durand–Kerner from coeffs
+  return durandKerner(preset.coeffs);
+}
+
+function getCurrentPolyAndDeriv() {
+  const presetKey = document.getElementById('poly-preset').value;
+  let coeffs;
+  if (presetKey === 'custom') {
+    const roots = parseRoots(document.getElementById('custom-roots').value);
+    coeffs = polyFromRoots(roots);
+    return { coeffs, derv: polyDeriv(coeffs), roots };
+  }
+  const preset = PRESETS[presetKey];
+  if (preset.coeffs) {
+    coeffs = preset.coeffs;
+    const roots = preset.roots || durandKerner(coeffs);
+    return { coeffs, derv: polyDeriv(coeffs), roots };
+  }
+  coeffs = polyFromRoots(preset.roots);
+  return { coeffs, derv: polyDeriv(coeffs), roots: preset.roots };
+}
+
+function updateLegend(roots) {
+  const legend = document.getElementById('legend');
+  legend.innerHTML = '';
+  for (let i = 0; i < roots.length; i++) {
+    const hue = (i / roots.length) * 360;
+    const [R,G,B] = hslToRgb(hue, 0.88, 0.55);
+    const item = document.createElement('div');
+    item.className = 'item';
+    const sw = document.createElement('div');
+    sw.className = 'swatch';
+    sw.style.background = `rgb(${R},${G},${B})`;
+    item.appendChild(sw);
+    const label = document.createElement('span');
+    const im = roots[i][1];
+    const reStr = roots[i][0].toFixed(4).replace(/\.?0+$/, '');
+    const imStr = Math.abs(im).toFixed(4).replace(/\.?0+$/, '');
+    label.textContent = Math.abs(im) < 1e-9
+      ? reStr
+      : `${reStr} ${im > 0 ? '+' : '−'} ${imStr}i`;
+    item.appendChild(label);
+    legend.appendChild(item);
+  }
+}
+
+function rootBaseColors(numRoots) {
+  const out = [];
+  for (let i = 0; i < numRoots; i++) {
+    out.push(hslToRgb((i / numRoots) * 360, 0.88, 0.55));
+  }
+  return out;
+}
+
+function readParams() {
+  const method = document.getElementById('method').value;
+  const h = parseFloat(document.getElementById('step-size').value);
+  const maxIter = Math.min(2000,
+                  Math.max(20, parseInt(document.getElementById('max-iter').value, 10)));
+  const tolExp = parseInt(document.getElementById('tol-exp').value, 10);
+  const tol = Math.pow(10, -tolExp);
+  const W = parseInt(document.getElementById('resolution').value, 10);
+  const H = W;
+  let bundle;
+  try { bundle = getCurrentPolyAndDeriv(); }
+  catch (e) { setStatus('Error: ' + e.message); return null; }
+  const { coeffs, derv, roots } = bundle;
+  const rootColors = rootBaseColors(roots.length);
+  const methodIdx = ['euler','refined-euler','heun','rk2','rk4','ab2'].indexOf(method);
+  const ss = Math.max(1, Math.min(4,
+              parseInt(document.getElementById('ssaa').value, 10) || 1));
+  return { method, methodIdx, h, maxIter, tol, W, H, ss,
+           coeffs, derv, roots, rootColors, view: { ...view } };
+}
+
+function resizeCanvas(W, H) {
+  canvas.width = W;
+  canvas.height = H;
+  const cssSize = Math.min(640, Math.max(380, window.innerWidth - 380));
+  canvas.style.width  = cssSize + 'px';
+  canvas.style.height = cssSize + 'px';
+  if (gl) gl.viewport(0, 0, W, H);
+  syncOverlayToFractal();
+}
+
+// ---------- GPU render ----------
+function renderGL(params) {
+  if (!gl || !glState) throw new Error('WebGL not initialised');
+  const { W, H, coeffs, derv, roots, rootColors,
+          methodIdx, h, maxIter, tol, view: V } = params;
+  gl.viewport(0, 0, W, H);
+  gl.clearColor(0, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(glState.prog);
+  gl.bindVertexArray(glState.vao);
+
+  const u = glState.u;
+  gl.uniform2f(u.uXBounds, V.xmin, V.xmax);
+  gl.uniform2f(u.uYBounds, V.ymin, V.ymax);
+  gl.uniform2f(u.uResolution, W, H);
+  gl.uniform1i(u.uPolyDeg, coeffs.length - 1);
+  gl.uniform1i(u.uNumRoots, roots.length);
+  gl.uniform1i(u.uMethod, methodIdx);
+  gl.uniform1f(u.uH, h);
+  gl.uniform1i(u.uMaxIter, Math.min(maxIter, 2000));
+  gl.uniform1f(u.uTol2, tol * tol);
+  gl.uniform1i(u.uSS, params.ss);
+
+  const MAX_DEG = 16;
+  const polyArr = new Float32Array((MAX_DEG + 1) * 2);
+  for (let i = 0; i < coeffs.length && i <= MAX_DEG; i++) {
+    polyArr[2*i] = coeffs[i][0]; polyArr[2*i+1] = coeffs[i][1];
+  }
+  gl.uniform2fv(u.uPolyCoeffs, polyArr);
+
+  const dervArr = new Float32Array(MAX_DEG * 2);
+  for (let i = 0; i < derv.length && i < MAX_DEG; i++) {
+    dervArr[2*i] = derv[i][0]; dervArr[2*i+1] = derv[i][1];
+  }
+  gl.uniform2fv(u.uDervCoeffs, dervArr);
+
+  const rootsArr = new Float32Array(MAX_DEG * 2);
+  for (let i = 0; i < roots.length && i < MAX_DEG; i++) {
+    rootsArr[2*i] = roots[i][0]; rootsArr[2*i+1] = roots[i][1];
+  }
+  gl.uniform2fv(u.uRoots, rootsArr);
+
+  const colorArr = new Float32Array(MAX_DEG * 3);
+  for (let i = 0; i < rootColors.length && i < MAX_DEG; i++) {
+    colorArr[3*i]   = rootColors[i][0] / 255;
+    colorArr[3*i+1] = rootColors[i][1] / 255;
+    colorArr[3*i+2] = rootColors[i][2] / 255;
+  }
+  gl.uniform3fv(u.uRootColors, colorArr);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.finish();   // make sure it's done before we report timing
+}
+
+// ---------- CPU render (progressive) ----------
+async function renderCPU(params, myState) {
+  const { W, H, coeffs, derv, roots, method, h, maxIter, tol, view: V } = params;
+  const tol2 = tol * tol;
+  const F = makeF(coeffs, derv);
+  const stepFn = getStepFn(method);
+  const isAB2 = method === 'ab2';
+  const palette = buildPalette(roots.length, maxIter);
+
+  const img = ctx.createImageData(W, H);
+  const data = img.data;
+  for (let i = 3; i < data.length; i += 4) data[i] = 255;
+
+  const dx = (V.xmax - V.xmin) / (W - 1);
+  const dy = (V.ymax - V.ymin) / (H - 1);
+  const chunkRows = Math.max(2, Math.floor(60_000 / W));
+  let y = 0;
+  return new Promise(resolve => {
+    function doChunk() {
+      if (myState.abort) { resolve(); return; }
+      const yEnd = Math.min(y + chunkRows, H);
+      for (; y < yEnd; y++) {
+        const im0 = V.ymax - y * dy;
+        for (let x = 0; x < W; x++) {
+          const re0 = V.xmin + x * dx;
+          const r = iterateSeed(stepFn, isAB2, F, [re0, im0], h, roots, tol2, maxIter);
+          const idx = (y*W + x) * 4;
+          if (r.rootIdx < 0) {
+            data[idx] = 0; data[idx+1] = 0; data[idx+2] = 0;
+          } else {
+            const it = Math.min(r.iters, maxIter - 1);
+            const row = palette[r.rootIdx];
+            data[idx] = row[3*it]; data[idx+1] = row[3*it+1]; data[idx+2] = row[3*it+2];
+          }
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      if (y < H) {
+        setStatus(`Rendering… ${Math.round(100*y/H)}%`);
+        setTimeout(doChunk, 0);
+      } else {
+        resolve();
+      }
+    }
+    doChunk();
+  });
+}
+
+// ---------- Top-level render ----------
+async function render() {
+  renderState.abort = true;
+  await Promise.resolve();
+  const myState = { abort: false };
+  renderState = myState;
+
+  const enginePref = document.getElementById('engine').value;
+  const engineUsed = ensureEngine(enginePref);
+
+  const params = readParams();
+  if (!params) return;
+  resizeCanvas(params.W, params.H);
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  setHudView();
+
+  const t0 = performance.now();
+  if (engineUsed === 'gpu') {
+    setStatus(`Rendering ${params.W}×${params.H} on GPU…`);
+    try {
+      renderGL(params);
+      const ms = (performance.now() - t0).toFixed(1);
+      setStatus(`Done in ${ms} ms (GPU). h=${params.h.toFixed(3)}, ${params.method}.`);
+      document.getElementById('hud-time').textContent = `${ms} ms · GPU`;
+    } catch (e) {
+      console.error(e);
+      setStatus('GPU render failed: ' + e.message);
+    }
+  } else {
+    setStatus(`Rendering ${params.W}×${params.H} on CPU…`);
+    await renderCPU(params, myState);
+    if (myState.abort) { setStatus('Cancelled.'); return; }
+    const ms = (performance.now() - t0).toFixed(0);
+    setStatus(`Done in ${ms} ms (CPU). h=${params.h.toFixed(3)}, ${params.method}.`);
+    document.getElementById('hud-time').textContent = `${ms} ms · CPU`;
+  }
+  updateLegend(params.roots);
+}
+
+// ---------- Animation ----------
+const stepSlider = document.getElementById('step-size');
+const stepLabel  = document.getElementById('step-size-value');
+const playBtn    = document.getElementById('anim-play');
+const scrub      = document.getElementById('anim-scrub');
+const scrubLabel = document.getElementById('anim-scrub-value');
+
+let anim = { running: false, t0: 0, raf: 0, scrubbing: false };
+
+function setHFromValue(value) {
+  stepSlider.value = String(value);
+  stepLabel.textContent = value.toFixed(3);
+}
+function readAnimParams() {
+  return {
+    h0: parseFloat(document.getElementById('h-start').value),
+    h1: parseFloat(document.getElementById('h-end').value),
+    duration: Math.max(0.5, parseFloat(document.getElementById('anim-duration').value)),
+    mode: document.getElementById('anim-mode').value,
+  };
+}
+function phaseAt(t, mode, duration) {
+  if (mode === 'forward') return (t / duration) % 1;
+  if (mode === 'once')    return Math.min(1, t / duration);
+  const c = (t / duration) % 2;
+  return c < 1 ? c : 2 - c;
+}
+// Update the scrubber UI to reflect a 0..1 phase and corresponding h.
+function setScrubFromPhase(phase, h) {
+  if (!anim.scrubbing) scrub.value = String(phase);
+  scrubLabel.textContent = `h=${h.toFixed(3)}`;
+}
+// When the user drags the scrubber, we land on h0 + phase*(h1-h0).
+// Set the time origin so a subsequent Play continues smoothly from this phase.
+function syncT0FromPhase(phase) {
+  const { duration, mode } = readAnimParams();
+  if (mode === 'forward' || mode === 'once') {
+    anim.t0 = performance.now() - phase * duration * 1000;
+  } else { // ping-pong
+    anim.t0 = performance.now() - phase * duration * 1000;
+  }
+}
+function startAnim() {
+  if (anim.running) { stopAnim(); return; }
+  anim.running = true;
+  // If the user has scrubbed, resume from that phase. Otherwise, restart from t=0.
+  const currentPhase = parseFloat(scrub.value);
+  if (currentPhase > 0 && currentPhase < 1) syncT0FromPhase(currentPhase);
+  else anim.t0 = performance.now();
+  playBtn.textContent = '⏸ Pause';
+  animTick();
+}
+function stopAnim() {
+  anim.running = false;
+  cancelAnimationFrame(anim.raf);
+  playBtn.textContent = '▶ Play';
+}
+async function animTick() {
+  if (!anim.running) return;
+  const { h0, h1, duration, mode } = readAnimParams();
+  const t = (performance.now() - anim.t0) / 1000;
+  const phase = phaseAt(t, mode, duration);
+  const h = h0 + phase * (h1 - h0);
+  setHFromValue(h);
+  setScrubFromPhase(phase, h);
+  await render();
+  if (mode === 'once' && phase >= 1) { stopAnim(); return; }
+  if (anim.running) anim.raf = requestAnimationFrame(animTick);
+}
+
+// Manual scrubbing. While the user drags, pause auto-play and re-render at the chosen h.
+let scrubRenderPending = false;
+async function scrubToCurrent() {
+  if (scrubRenderPending) return;
+  scrubRenderPending = true;
+  const { h0, h1 } = readAnimParams();
+  const phase = parseFloat(scrub.value);
+  const h = h0 + phase * (h1 - h0);
+  setHFromValue(h);
+  scrubLabel.textContent = `h=${h.toFixed(3)}`;
+  await render();
+  scrubRenderPending = false;
+}
+scrub.addEventListener('mousedown',  () => { anim.scrubbing = true;  if (anim.running) stopAnim(); });
+scrub.addEventListener('touchstart', () => { anim.scrubbing = true;  if (anim.running) stopAnim(); });
+scrub.addEventListener('mouseup',    () => { anim.scrubbing = false; });
+scrub.addEventListener('touchend',   () => { anim.scrubbing = false; });
+scrub.addEventListener('input',      scrubToCurrent);
+
+// ---------- Frame capture (animation → ZIP of PNGs) ----------
+async function captureFrames() {
+  if (anim.running) stopAnim();
+  const { h0, h1, duration, mode } = readAnimParams();
+  const fps = 24;
+  const numFrames = Math.max(2, Math.round(duration * fps));
+  const W = parseInt(document.getElementById('resolution').value, 10);
+  const captureBtn = document.getElementById('capture-frames');
+  captureBtn.disabled = true;
+  setStatus(`Capturing ${numFrames} frames at ${W}×${W}…`);
+  const files = [];
+  try {
+    for (let i = 0; i < numFrames; i++) {
+      const phase = (mode === 'loop')
+        ? (function(){ const c = (2*i / numFrames) % 2; return c < 1 ? c : 2 - c; })()
+        : (mode === 'forward' ? i / numFrames : i / Math.max(1, numFrames - 1));
+      const h = h0 + phase * (h1 - h0);
+      setHFromValue(h);
+      await render();
+      // Ensure WebGL framebuffer is available for toBlob; preserveDrawingBuffer is set.
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      files.push({ name: `frame_${String(i).padStart(4,'0')}.png`, data: bytes });
+      if (i % 4 === 0 || i === numFrames - 1) {
+        setStatus(`Capturing frame ${i+1} / ${numFrames}…`);
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    setStatus('Building ZIP…');
+    const zipBlob = buildZip(files);
+    downloadBlob(zipBlob, `cayley_frames_${Date.now()}.zip`);
+    setStatus(`Saved ZIP with ${numFrames} frames (${(zipBlob.size/1e6).toFixed(1)} MB).`);
+  } catch (e) {
+    console.error(e);
+    setStatus('Capture failed: ' + e.message);
+  } finally {
+    captureBtn.disabled = false;
+  }
+}
+// ---------- Record animation as video (WebM / MP4) ----------
+function pickVideoMime() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  const candidates = [
+    'video/mp4;codecs=avc1.42E01E',     // H.264 baseline (Safari, recent Chrome)
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return null;
+}
+
+async function recordVideo() {
+  if (anim.running) stopAnim();
+  const { h0, h1, duration, mode } = readAnimParams();
+  const fps = Math.max(6, Math.min(60,
+                       parseInt(document.getElementById('record-fps').value, 10) || 24));
+  const frameMs = 1000 / fps;
+
+  const mimeType = pickVideoMime();
+  if (!mimeType) {
+    setStatus('MediaRecorder/codec unavailable. Use Frames → ZIP instead.');
+    return;
+  }
+  const ext = mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
+
+  // Optionally switch the canvas to a smaller recording resolution.
+  const recResEl = document.getElementById('record-resolution');
+  const previewResEl = document.getElementById('resolution');
+  const previewResValue = previewResEl.value;
+  let resolutionChanged = false;
+  if (recResEl.value !== 'match' && recResEl.value !== previewResValue) {
+    previewResEl.value = recResEl.value;
+    resolutionChanged = true;
+  }
+
+  // Pre-render so the stream has content from the start.
+  setHFromValue(h0);
+  await render();
+
+  let stream;
+  try { stream = canvas.captureStream(fps); }
+  catch (e) {
+    setStatus('canvas.captureStream not supported here: ' + e.message);
+    if (resolutionChanged) { previewResEl.value = previewResValue; await render(); }
+    return;
+  }
+
+  // Bitrate scales with frame size — fractal edges have lots of high-frequency
+  // content that compresses poorly. Cap at 50 Mbps.
+  const recW = canvas.width;
+  const bitrate = Math.min(50_000_000,
+                  Math.max(8_000_000, Math.round(recW * recW * fps * 0.18)));
+  const recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: bitrate,
+  });
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(r => recorder.onstop = r);
+
+  const btn = document.getElementById('record-video');
+  btn.disabled = true;
+  const W = parseInt(previewResEl.value, 10);
+  setStatus(`Recording ${duration.toFixed(1)}s at ${W}×${W} @ ${fps} fps target as ${ext.toUpperCase()}…`);
+  recorder.start();
+  const tStart = performance.now();
+  const tEnd   = tStart + duration * 1000;
+  let framesRendered = 0;
+  let lastRenderMs = 0;
+
+  try {
+    // Wall-clock loop: keep rendering with the appropriate h until 'duration' seconds
+    // of real time have elapsed. The recorder samples the canvas at ~fps, so however
+    // many unique frames we manage to render are what end up in the video.
+    while (performance.now() < tEnd) {
+      const t = (performance.now() - tStart) / 1000;
+      let phase;
+      if (mode === 'forward')      phase = (t / duration) % 1;
+      else if (mode === 'once')    phase = Math.min(1, t / duration);
+      else { /* loop = ping-pong over the chosen duration */
+        const c = (2 * t / duration) % 2;
+        phase = c < 1 ? c : 2 - c;
+      }
+      const h = h0 + phase * (h1 - h0);
+      setHFromValue(h);
+
+      const rt0 = performance.now();
+      await render();
+      lastRenderMs = performance.now() - rt0;
+      framesRendered++;
+
+      // If render is much faster than 1/fps, sleep to avoid wasting work
+      // (the recorder only samples every 1/fps anyway).
+      const slack = frameMs - lastRenderMs;
+      if (slack > 1) await new Promise(r => setTimeout(r, slack));
+
+      if (framesRendered % 4 === 0) {
+        const pct = Math.min(100, Math.round(100 * t / duration));
+        setStatus(`Recording… ${pct}%  (${framesRendered} unique frames, ` +
+                  `last render ${lastRenderMs.toFixed(0)} ms)`);
+        scrub.value = String(Math.min(1, t / duration));
+        scrubLabel.textContent = `h=${h.toFixed(3)}`;
+      }
+    }
+  } catch (e) {
+    console.error(e);
+    setStatus('Recording error: ' + e.message);
+  } finally {
+    recorder.stop();
+    await stopped;
+    stream.getTracks().forEach(t => t.stop());
+    btn.disabled = false;
+    if (resolutionChanged) {
+      previewResEl.value = previewResValue;
+      await render();
+    }
+  }
+
+  const blob = new Blob(chunks, { type: mimeType });
+  downloadBlob(blob, `cayley_anim_${Date.now()}.${ext}`);
+  const effFps = framesRendered / duration;
+  const note = effFps < fps * 0.7
+    ? `⚠ effective ${effFps.toFixed(1)} fps — frames are repeated. Drop recording resolution or iter count for smoother output.`
+    : `effective ${effFps.toFixed(1)} fps.`;
+  setStatus(`Saved ${ext.toUpperCase()} (${(blob.size/1e6).toFixed(1)} MB, ` +
+            `${duration.toFixed(1)}s, ${framesRendered} unique frames, ${note})`);
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
+}
+
+// Single-frame PNG download
+async function downloadCurrentFramePng() {
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+  downloadBlob(blob, `cayley_frame_${Date.now()}.png`);
+}
+
+// ---------- Minimal ZIP encoder (STORE, i.e. no compression) ----------
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function buildZip(files) {
+  const enc = new TextEncoder();
+  const local = [];
+  const central = [];
+  let offset = 0;
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const crc = crc32(f.data);
+    const size = f.data.length;
+    const lfh = new Uint8Array(30 + nameBytes.length);
+    const dv = new DataView(lfh.buffer);
+    dv.setUint32(0, 0x04034b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 0, true);
+    dv.setUint16(8, 0, true);          // STORE
+    dv.setUint16(10, 0, true);
+    dv.setUint16(12, 0, true);
+    dv.setUint32(14, crc, true);
+    dv.setUint32(18, size, true);
+    dv.setUint32(22, size, true);
+    dv.setUint16(26, nameBytes.length, true);
+    dv.setUint16(28, 0, true);
+    lfh.set(nameBytes, 30);
+    local.push(lfh, f.data);
+
+    const cdh = new Uint8Array(46 + nameBytes.length);
+    const dv2 = new DataView(cdh.buffer);
+    dv2.setUint32(0, 0x02014b50, true);
+    dv2.setUint16(4, 20, true);
+    dv2.setUint16(6, 20, true);
+    dv2.setUint16(8, 0, true);
+    dv2.setUint16(10, 0, true);
+    dv2.setUint16(12, 0, true);
+    dv2.setUint16(14, 0, true);
+    dv2.setUint32(16, crc, true);
+    dv2.setUint32(20, size, true);
+    dv2.setUint32(24, size, true);
+    dv2.setUint16(28, nameBytes.length, true);
+    dv2.setUint16(30, 0, true);
+    dv2.setUint16(32, 0, true);
+    dv2.setUint16(34, 0, true);
+    dv2.setUint16(36, 0, true);
+    dv2.setUint32(38, 0, true);
+    dv2.setUint32(42, offset, true);
+    cdh.set(nameBytes, 46);
+    central.push(cdh);
+    offset += lfh.length + size;
+  }
+  const cdrSize = central.reduce((s, c) => s + c.length, 0);
+  const cdrOffset = offset;
+  const eocd = new Uint8Array(22);
+  const dv3 = new DataView(eocd.buffer);
+  dv3.setUint32(0, 0x06054b50, true);
+  dv3.setUint16(4, 0, true);
+  dv3.setUint16(6, 0, true);
+  dv3.setUint16(8, files.length, true);
+  dv3.setUint16(10, files.length, true);
+  dv3.setUint32(12, cdrSize, true);
+  dv3.setUint32(16, cdrOffset, true);
+  dv3.setUint16(20, 0, true);
+  return new Blob([...local, ...central, eocd], { type: 'application/zip' });
+}
+
+// ---------- UI wiring ----------
+stepSlider.addEventListener('input', () => {
+  stepLabel.textContent = parseFloat(stepSlider.value).toFixed(3);
+});
+
+document.getElementById('poly-preset').addEventListener('change', e => {
+  const isCustom = e.target.value === 'custom';
+  const inp = document.getElementById('custom-roots');
+  inp.disabled = !isCustom;
+  if (isCustom && !inp.value) inp.value = '1, -0.5+0.866i, -0.5-0.866i';
+});
+
+document.getElementById('reset-view').addEventListener('click', () => {
+  view = { xmin: -1.5, xmax: 1.5, ymin: -1.5, ymax: 1.5 };
+  render();
+});
+document.getElementById('zoom-out').addEventListener('click', () => {
+  const cx = (view.xmin + view.xmax) / 2;
+  const cy = (view.ymin + view.ymax) / 2;
+  const w = view.xmax - view.xmin;
+  view = { xmin: cx - w, xmax: cx + w, ymin: cy - w, ymax: cy + w };
+  render();
+});
+
+document.getElementById('render-btn').addEventListener('click', render);
+
+// Re-render automatically on most control changes
+['method','poly-preset','step-size','max-iter','tol-exp','resolution','custom-roots','ssaa']
+  .forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('change', () => { if (!anim.running) render(); });
+  });
+
+// ---------- Canvas interaction: drag-rectangle zoom, click-zoom, alt-drag pan ----------
+function clientToCanvasPx(e) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) / r.width  * canvas.width,
+    y: (e.clientY - r.top)  / r.height * canvas.height,
+  };
+}
+function canvasPxToMath(px, py) {
+  // canvas y top → ymax, bottom → ymin
+  return {
+    re: view.xmin + (px / Math.max(1, canvas.width  - 1)) * (view.xmax - view.xmin),
+    im: view.ymax - (py / Math.max(1, canvas.height - 1)) * (view.ymax - view.ymin),
+  };
+}
+const DRAG_THRESHOLD = 5;
+let drag = null;
+
+function drawZoomRect(x1, y1, x2, y2) {
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  const dx = x2 - x1, dy = y2 - y1;
+  const size = Math.max(Math.abs(dx), Math.abs(dy));
+  if (size < 2) return;
+  const sx = dx >= 0 ? size : -size;
+  const sy = dy >= 0 ? size : -size;
+  const rx = Math.min(x1, x1 + sx);
+  const ry = Math.min(y1, y1 + sy);
+  octx.save();
+  octx.lineWidth = Math.max(1.5, canvas.width / 400);
+  octx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  octx.fillStyle   = 'rgba(122, 162, 255, 0.18)';
+  octx.setLineDash([Math.max(4, canvas.width / 100), Math.max(3, canvas.width / 150)]);
+  octx.fillRect(rx, ry, size, size);
+  octx.strokeRect(rx, ry, size, size);
+  octx.restore();
+}
+function clearOverlay() { octx.clearRect(0, 0, overlay.width, overlay.height); }
+
+function onCanvasMouseMove(e) {
+  const p = clientToCanvasPx(e);
+  const z = canvasPxToMath(p.x, p.y);
+  document.getElementById('hud-z').textContent =
+    `${z.re.toFixed(4)} ${z.im>=0?'+':'−'} ${Math.abs(z.im).toFixed(4)}i`;
+}
+function onCanvasMouseLeave() {
+  document.getElementById('hud-z').textContent = '—';
+}
+function onCanvasMouseDown(e) {
+  if (e.button !== 0) return;
+  const p = clientToCanvasPx(e);
+  drag = {
+    mode: e.altKey ? 'pan' : 'zoom-rect',
+    startPx: p,
+    startClient: { x: e.clientX, y: e.clientY },
+    view: { ...view },
+    moved: false,
+  };
+  e.preventDefault();
+}
+function attachCanvasHandlers() {
+  canvas.addEventListener('mousemove', onCanvasMouseMove);
+  canvas.addEventListener('mouseleave', onCanvasMouseLeave);
+  canvas.addEventListener('mousedown', onCanvasMouseDown);
+}
+
+// Window-level handlers (attached once; canvas reference is read at the time)
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  const movedPx = Math.abs(e.clientX - drag.startClient.x) +
+                  Math.abs(e.clientY - drag.startClient.y);
+  if (movedPx > DRAG_THRESHOLD) drag.moved = true;
+  if (!drag.moved) return;
+  if (drag.mode === 'pan') {
+    const r = canvas.getBoundingClientRect();
+    const dxMath = (e.clientX - drag.startClient.x) / r.width
+                 * (drag.view.xmax - drag.view.xmin);
+    const dyMath = (e.clientY - drag.startClient.y) / r.height
+                 * (drag.view.ymax - drag.view.ymin);
+    view = {
+      xmin: drag.view.xmin - dxMath,
+      xmax: drag.view.xmax - dxMath,
+      ymin: drag.view.ymin + dyMath,
+      ymax: drag.view.ymax + dyMath,
+    };
+    setHudView();
+  } else {
+    const p = clientToCanvasPx(e);
+    drawZoomRect(drag.startPx.x, drag.startPx.y, p.x, p.y);
+  }
+});
+window.addEventListener('mouseup', e => {
+  if (!drag) return;
+  const wasZoomRect = drag.mode === 'zoom-rect';
+  const wasMoved = drag.moved;
+  const startPx = drag.startPx;
+  const endPx = clientToCanvasPx(e);
+  drag = null;
+  if (!wasMoved) {
+    const p = canvasPxToMath(endPx.x, endPx.y);
+    const w = view.xmax - view.xmin;
+    const factor = e.shiftKey ? 2 : 0.5;
+    view = {
+      xmin: p.re - factor * w / 2,
+      xmax: p.re + factor * w / 2,
+      ymin: p.im - factor * w / 2,
+      ymax: p.im + factor * w / 2,
+    };
+    render();
+    return;
+  }
+  if (wasZoomRect) {
+    const dx = endPx.x - startPx.x, dy = endPx.y - startPx.y;
+    const size = Math.max(Math.abs(dx), Math.abs(dy));
+    if (size < DRAG_THRESHOLD) { clearOverlay(); return; }
+    const sx = dx >= 0 ? size : -size;
+    const sy = dy >= 0 ? size : -size;
+    const xL = Math.min(startPx.x, startPx.x + sx);
+    const yT = Math.min(startPx.y, startPx.y + sy);
+    const tl = canvasPxToMath(xL, yT);
+    const br = canvasPxToMath(xL + size, yT + size);
+    view = { xmin: tl.re, xmax: br.re, ymin: br.im, ymax: tl.im };
+    clearOverlay();
+    render();
+  } else {
+    render();
+  }
+});
+window.addEventListener('blur', () => { drag = null; clearOverlay(); });
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && drag) { drag = null; clearOverlay(); }
+});
+
+// ---------- Animation buttons ----------
+playBtn.addEventListener('click', startAnim);
+document.getElementById('anim-stop').addEventListener('click', stopAnim);
+document.getElementById('capture-frames').addEventListener('click', captureFrames);
+document.getElementById('record-video').addEventListener('click', recordVideo);
+
+// ---------- Initial wiring & first render ----------
+window.addEventListener('load', async () => {
+  // Engine is selected on first render(); re-render whenever the dropdown changes.
+  document.getElementById('engine').addEventListener('change', () => { render(); });
+  attachCanvasHandlers();   // first attach (canvas may be replaced by ensureEngine on first render)
+  await render();
+});
+</script>
+</body>
+</html>
