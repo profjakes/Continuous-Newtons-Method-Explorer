@@ -485,24 +485,22 @@ function hslToRgb(h, s, l) {
   return [Math.round((r+m)*255), Math.round((g+m)*255), Math.round((b+m)*255)];
 }
 
-function buildPalette(numRoots, maxIter) {
-  // Pre-compute for each (rootIdx, iters) → rgb
-  // Fast-converging interior: vivid mid-tone (lightness ~0.5, sat ~0.85).
-  // Slow / boundary: progressively darker, slightly desaturated.
-  // Convergence is fast in most basins, so we compress the iteration→t curve
-  // (sqrt) so subtle differences in iteration count are visible inside basins.
+function buildPalette(numRoots, maxIter, shading = 0.6) {
+  // Match the GPU path exactly: base = HSL(hue, 0.88, 0.55); pixel = base × factor
+  // where factor = mix(1, mix(1, 0.27, shading), t) and t = √(iters / maxIter).
+  // shading=0 → no darkening; shading=1 → full original darkening.
   const palette = [];
+  const minBright = 1.0 - shading * (1.0 - 0.27);
   for (let r = 0; r < numRoots; r++) {
     const hue = (r / numRoots) * 360;
+    const [bR, bG, bB] = hslToRgb(hue, 0.88, 0.55);
     const row = new Uint8Array(maxIter * 3);
     for (let it = 0; it < maxIter; it++) {
-      const t = Math.sqrt(it / Math.max(1, maxIter - 1));   // perceptual ramp
-      const lightness = 0.55 - t*0.40;                       // 0.55 → 0.15
-      const sat       = 0.88 - t*0.20;                       // 0.88 → 0.68
-      const [R,G,B] = hslToRgb(hue, sat, Math.max(0.06, lightness));
-      row[3*it]   = R;
-      row[3*it+1] = G;
-      row[3*it+2] = B;
+      const t = Math.sqrt(it / Math.max(1, maxIter - 1));
+      const factor = 1.0 - t * (1.0 - minBright);
+      row[3*it]   = Math.round(bR * factor);
+      row[3*it+1] = Math.round(bG * factor);
+      row[3*it+2] = Math.round(bB * factor);
     }
     palette.push(row);
   }
@@ -691,17 +689,25 @@ void main() {
     return;
   }
   if (uPass == 2) {
-    // Refine pass: gather the 4 coarse-texture neighbours that bilinear
+    // Refine pass: fetch the 4 coarse-texture neighbours that bilinear
     // filtering would interpolate between. If they all share the same
     // converged root, take a single bilinear sample (cheap). Otherwise
     // fall back to full SSAA on this pixel (expensive but only at edges).
+    // (Implemented with texelFetch — GLSL ES 3.00 core. Avoids textureGather,
+    //  which is 3.10 and therefore not available in WebGL 2.)
     vec2 uv = gl_FragCoord.xy / uResolution;
-    vec4 alphas = textureGather(uCoarseTex, uv, 3);
-    float a0 = alphas.x;
-    bool allAgree = (abs(alphas.y - a0) < 0.01) &&
-                    (abs(alphas.z - a0) < 0.01) &&
-                    (abs(alphas.w - a0) < 0.01);
-    if (allAgree && a0 > 0.001) {
+    ivec2 cSize = textureSize(uCoarseTex, 0);
+    ivec2 maxIdx = cSize - 1;
+    vec2 cCoord = uv * vec2(cSize) - 0.5;
+    ivec2 b = ivec2(floor(cCoord));
+    float a00 = texelFetch(uCoarseTex, clamp(b,                ivec2(0), maxIdx), 0).a;
+    float a10 = texelFetch(uCoarseTex, clamp(b + ivec2(1, 0),  ivec2(0), maxIdx), 0).a;
+    float a01 = texelFetch(uCoarseTex, clamp(b + ivec2(0, 1),  ivec2(0), maxIdx), 0).a;
+    float a11 = texelFetch(uCoarseTex, clamp(b + ivec2(1, 1),  ivec2(0), maxIdx), 0).a;
+    bool allAgree = (abs(a10 - a00) < 0.01) &&
+                    (abs(a01 - a00) < 0.01) &&
+                    (abs(a11 - a00) < 0.01);
+    if (allAgree && a00 > 0.001) {
       fragColor = vec4(texture(uCoarseTex, uv).rgb, 1.0);
       return;
     }
@@ -819,7 +825,8 @@ function ensureEngine(prefer) {
         return 'gpu';
       } catch (e) {
         console.error('WebGL setup failed:', e);
-        setEngineStatus('WebGL init failed; using CPU.');
+        const msg = (e && e.message) ? e.message.split('\n')[0] : String(e);
+        setEngineStatus('WebGL init failed → CPU. ' + msg.slice(0, 140));
         recreateCanvas();
       }
     } else {
@@ -1030,12 +1037,12 @@ function renderGL(params) {
 
 // ---------- CPU render (progressive) ----------
 async function renderCPU(params, myState) {
-  const { W, H, coeffs, derv, roots, method, h, maxIter, tol, view: V } = params;
+  const { W, H, coeffs, derv, roots, method, h, maxIter, tol, shading, view: V } = params;
   const tol2 = tol * tol;
   const F = makeF(coeffs, derv);
   const stepFn = getStepFn(method);
   const isAB2 = method === 'ab2';
-  const palette = buildPalette(roots.length, maxIter);
+  const palette = buildPalette(roots.length, maxIter, shading ?? 0.6);
 
   const img = ctx.createImageData(W, H);
   const data = img.data;
