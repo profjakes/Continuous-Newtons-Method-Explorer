@@ -162,6 +162,11 @@
         <option value="3">SSAA 3× (9 samples)</option>
         <option value="4">SSAA 4× (16 samples — slow)</option>
       </select>
+      <select id="adaptive" title="Coarse-then-refine: skip the iteration on basin interiors where neighbouring pixels agree on which root they converged to.">
+        <option value="1">no adaptive sampling</option>
+        <option value="4" selected>adaptive 4× (faster on smooth basins)</option>
+        <option value="8">adaptive 8× (faster, may miss thin features)</option>
+      </select>
       <small class="hint" id="engine-status">—</small>
     </fieldset>
 
@@ -539,6 +544,8 @@ uniform float uH;
 uniform int   uMaxIter;
 uniform float uTol2;
 uniform int   uSS;            // supersampling factor (1..4)
+uniform int   uPass;          // 0 = single pass, 1 = adaptive coarse, 2 = adaptive refine
+uniform sampler2D uCoarseTex; // populated only when uPass == 2
 
 out vec4 fragColor;
 
@@ -573,9 +580,13 @@ vec2 fField(vec2 z) {
   return -cdiv(p, dp);
 }
 
-// Iterate one seed and return its colour (vec3). Returns black if the orbit
-// failed to converge within uMaxIter iterations.
-vec3 computeColor(vec2 z0) {
+// Iterate one seed and return (color.rgb, encodedRootIdx).
+// encodedRootIdx is packed into the alpha channel:
+//   0.0                          → orbit did not converge
+//   (rootIdx + 1) / 16.0         → converged to root k ∈ [0, 15]
+// This packing lets the refine pass decide quickly whether neighbouring
+// coarse cells all converged to the same root (cheap alpha-channel compare).
+vec4 computePixel(vec2 z0) {
   vec2 z = z0;
   vec2 prevF = vec2(0.0);
   bool hasPrev = false;
@@ -627,32 +638,65 @@ vec3 computeColor(vec2 z0) {
     }
   }
 
-  if (rootIdx < 0) return vec3(0.0);
-  float t = sqrt(float(convergedAt) / max(1.0, float(uMaxIter - 1)));
-  return uRootColors[rootIdx] * mix(1.0, 0.27, t);
+  vec3 col = vec3(0.0);
+  if (rootIdx >= 0) {
+    float t = sqrt(float(convergedAt) / max(1.0, float(uMaxIter - 1)));
+    col = uRootColors[rootIdx] * mix(1.0, 0.27, t);
+  }
+  float alpha = (rootIdx < 0) ? 0.0 : (float(rootIdx) + 1.0) / 16.0;
+  return vec4(col, alpha);
 }
 
-void main() {
-  // Supersampling antialias: average uSS×uSS subpixel samples, equally spaced
-  // across the pixel cell. Smooths the otherwise jagged basin boundaries.
+vec2 fragToZ(vec2 frag) {
+  vec2 uv = frag / uResolution;
+  return vec2(
+    uXBounds.x + uv.x * (uXBounds.y - uXBounds.x),
+    uYBounds.x + uv.y * (uYBounds.y - uYBounds.x)
+  );
+}
+
+vec3 ssaaSample() {
   vec3 sum = vec3(0.0);
   float invSS = 1.0 / float(uSS);
   for (int sy = 0; sy < 4; sy++) {
     if (sy >= uSS) break;
     for (int sx = 0; sx < 4; sx++) {
       if (sx >= uSS) break;
-      vec2 sub = (vec2(float(sx), float(sy)) + 0.5) * invSS;   // in (0,1)
-      vec2 frag = gl_FragCoord.xy - 0.5 + sub;                 // pixel-relative
-      float u = frag.x / uResolution.x;
-      float v = frag.y / uResolution.y;
-      vec2 z = vec2(
-        uXBounds.x + u * (uXBounds.y - uXBounds.x),
-        uYBounds.x + v * (uYBounds.y - uYBounds.x)
-      );
-      sum += computeColor(z);
+      vec2 sub = (vec2(float(sx), float(sy)) + 0.5) * invSS;
+      vec2 frag = gl_FragCoord.xy - 0.5 + sub;
+      sum += computePixel(fragToZ(frag)).rgb;
     }
   }
-  fragColor = vec4(sum / float(uSS * uSS), 1.0);
+  return sum / float(uSS * uSS);
+}
+
+void main() {
+  if (uPass == 1) {
+    // Coarse pass: full iteration, single sample per coarse texel.
+    // Output (color, encodedRootIdx) so the refine pass can decide.
+    fragColor = computePixel(fragToZ(gl_FragCoord.xy));
+    return;
+  }
+  if (uPass == 2) {
+    // Refine pass: gather the 4 coarse-texture neighbours that bilinear
+    // filtering would interpolate between. If they all share the same
+    // converged root, take a single bilinear sample (cheap). Otherwise
+    // fall back to full SSAA on this pixel (expensive but only at edges).
+    vec2 uv = gl_FragCoord.xy / uResolution;
+    vec4 alphas = textureGather(uCoarseTex, uv, 3);
+    float a0 = alphas.x;
+    bool allAgree = (abs(alphas.y - a0) < 0.01) &&
+                    (abs(alphas.z - a0) < 0.01) &&
+                    (abs(alphas.w - a0) < 0.01);
+    if (allAgree && a0 > 0.001) {
+      fragColor = vec4(texture(uCoarseTex, uv).rgb, 1.0);
+      return;
+    }
+    fragColor = vec4(ssaaSample(), 1.0);
+    return;
+  }
+  // Pass 0: classic single-pass SSAA.
+  fragColor = vec4(ssaaSample(), 1.0);
 }
 `;
 
@@ -694,10 +738,36 @@ function setupWebGL(g) {
   const u = {};
   for (const n of ['uXBounds','uYBounds','uResolution','uPolyDeg','uPolyCoeffs',
                    'uDervCoeffs','uNumRoots','uRoots','uRootColors','uMethod',
-                   'uH','uMaxIter','uTol2','uSS']) {
+                   'uH','uMaxIter','uTol2','uSS','uPass','uCoarseTex']) {
     u[n] = g.getUniformLocation(prog, n);
   }
-  return { prog, vao, u };
+  return { prog, vao, u, coarseFBO: null, coarseTex: null, coarseSize: 0 };
+}
+
+// Allocate (or reuse) a small framebuffer-backed texture for the adaptive
+// coarse pass. Lives inside glState so it's released when the engine swaps.
+function ensureCoarseFBO(size) {
+  if (glState.coarseFBO && glState.coarseSize === size) return;
+  if (glState.coarseFBO) {
+    gl.deleteFramebuffer(glState.coarseFBO);
+    gl.deleteTexture(glState.coarseTex);
+  }
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, size, size, 0,
+                gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+                          gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  glState.coarseFBO = fbo;
+  glState.coarseTex = tex;
+  glState.coarseSize = size;
 }
 
 // ---------- Engine switching: requires recreating the canvas element ----------
@@ -840,7 +910,9 @@ function readParams() {
   const methodIdx = ['euler','refined-euler','heun','rk2','rk4','ab2'].indexOf(method);
   const ss = Math.max(1, Math.min(4,
               parseInt(document.getElementById('ssaa').value, 10) || 1));
-  return { method, methodIdx, h, maxIter, tol, W, H, ss,
+  const adaptive = Math.max(1, Math.min(16,
+              parseInt(document.getElementById('adaptive').value, 10) || 1));
+  return { method, methodIdx, h, maxIter, tol, W, H, ss, adaptive,
            coeffs, derv, roots, rootColors, view: { ...view } };
 }
 
@@ -855,17 +927,9 @@ function resizeCanvas(W, H) {
 }
 
 // ---------- GPU render ----------
-function renderGL(params) {
-  if (!gl || !glState) throw new Error('WebGL not initialised');
-  const { W, H, coeffs, derv, roots, rootColors,
-          methodIdx, h, maxIter, tol, view: V } = params;
-  gl.viewport(0, 0, W, H);
-  gl.clearColor(0, 0, 0, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.useProgram(glState.prog);
-  gl.bindVertexArray(glState.vao);
-
+function setGLUniforms(params, W, H, ss) {
   const u = glState.u;
+  const { coeffs, derv, roots, rootColors, methodIdx, h, maxIter, tol, view: V } = params;
   gl.uniform2f(u.uXBounds, V.xmin, V.xmax);
   gl.uniform2f(u.uYBounds, V.ymin, V.ymax);
   gl.uniform2f(u.uResolution, W, H);
@@ -875,7 +939,7 @@ function renderGL(params) {
   gl.uniform1f(u.uH, h);
   gl.uniform1i(u.uMaxIter, Math.min(maxIter, 2000));
   gl.uniform1f(u.uTol2, tol * tol);
-  gl.uniform1i(u.uSS, params.ss);
+  gl.uniform1i(u.uSS, ss);
 
   const MAX_DEG = 16;
   const polyArr = new Float32Array((MAX_DEG + 1) * 2);
@@ -903,9 +967,49 @@ function renderGL(params) {
     colorArr[3*i+2] = rootColors[i][2] / 255;
   }
   gl.uniform3fv(u.uRootColors, colorArr);
+}
 
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  gl.finish();   // make sure it's done before we report timing
+function renderGL(params) {
+  if (!gl || !glState) throw new Error('WebGL not initialised');
+  const { W, H, ss, adaptive } = params;
+  const u = glState.u;
+  gl.useProgram(glState.prog);
+  gl.bindVertexArray(glState.vao);
+
+  if (adaptive > 1) {
+    // Two-pass adaptive sampling.
+    const coarseSize = Math.max(16, Math.ceil(W / adaptive));
+    ensureCoarseFBO(coarseSize);
+
+    // Pass 1: coarse render to off-screen texture, 1 sample per coarse pixel.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, glState.coarseFBO);
+    gl.viewport(0, 0, coarseSize, coarseSize);
+    setGLUniforms(params, coarseSize, coarseSize, 1);
+    gl.uniform1i(u.uPass, 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    // Pass 2: refine pass at full resolution. Pixels inside basins (where the
+    // 4 surrounding coarse texels all agree) take one bilinear sample of the
+    // coarse texture; pixels near a boundary fall back to full SSAA.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, glState.coarseTex);
+    gl.uniform1i(u.uCoarseTex, 0);
+    setGLUniforms(params, W, H, ss);
+    gl.uniform1i(u.uPass, 2);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  } else {
+    // Single-pass uniform render with SSAA.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    setGLUniforms(params, W, H, ss);
+    gl.uniform1i(u.uPass, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+  gl.finish();
 }
 
 // ---------- CPU render (progressive) ----------
@@ -1392,7 +1496,7 @@ document.getElementById('zoom-out').addEventListener('click', () => {
 document.getElementById('render-btn').addEventListener('click', render);
 
 // Re-render automatically on most control changes
-['method','poly-preset','step-size','max-iter','tol-exp','resolution','custom-roots','ssaa']
+['method','poly-preset','step-size','max-iter','tol-exp','resolution','custom-roots','ssaa','adaptive']
   .forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('change', () => { if (!anim.running) render(); });
