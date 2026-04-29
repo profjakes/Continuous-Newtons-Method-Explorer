@@ -139,6 +139,15 @@
           <input id="tol-exp" type="number" min="3" max="14" value="6">
         </div>
       </div>
+      <div>
+        <small>convergence shading</small>
+        <select id="shading">
+          <option value="1.0">full  (slow convergence darkens to 27%)</option>
+          <option value="0.6" selected>moderate  (darkens to ~56%)</option>
+          <option value="0.3">subtle  (darkens to ~78%)</option>
+          <option value="0.0">off  (color = root only)</option>
+        </select>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -543,9 +552,10 @@ uniform int   uMethod;
 uniform float uH;
 uniform int   uMaxIter;
 uniform float uTol2;
-uniform int   uSS;            // supersampling factor (1..4)
-uniform int   uPass;          // 0 = single pass, 1 = adaptive coarse, 2 = adaptive refine
-uniform sampler2D uCoarseTex; // populated only when uPass == 2
+uniform int   uSS;              // supersampling factor (1..4)
+uniform int   uPass;            // 0 = single pass, 1 = adaptive coarse, 2 = adaptive refine
+uniform sampler2D uCoarseTex;   // populated only when uPass == 2
+uniform float uShading;         // 0..1; how much to darken slow-converging pixels
 
 out vec4 fragColor;
 
@@ -641,7 +651,10 @@ vec4 computePixel(vec2 z0) {
   vec3 col = vec3(0.0);
   if (rootIdx >= 0) {
     float t = sqrt(float(convergedAt) / max(1.0, float(uMaxIter - 1)));
-    col = uRootColors[rootIdx] * mix(1.0, 0.27, t);
+    // uShading == 1.0 → original behaviour (darken to 0.27).
+    // uShading == 0.0 → no darkening (col = base).
+    float minBright = mix(1.0, 0.27, uShading);
+    col = uRootColors[rootIdx] * mix(1.0, minBright, t);
   }
   float alpha = (rootIdx < 0) ? 0.0 : (float(rootIdx) + 1.0) / 16.0;
   return vec4(col, alpha);
@@ -738,7 +751,7 @@ function setupWebGL(g) {
   const u = {};
   for (const n of ['uXBounds','uYBounds','uResolution','uPolyDeg','uPolyCoeffs',
                    'uDervCoeffs','uNumRoots','uRoots','uRootColors','uMethod',
-                   'uH','uMaxIter','uTol2','uSS','uPass','uCoarseTex']) {
+                   'uH','uMaxIter','uTol2','uSS','uPass','uCoarseTex','uShading']) {
     u[n] = g.getUniformLocation(prog, n);
   }
   return { prog, vao, u, coarseFBO: null, coarseTex: null, coarseSize: 0 };
@@ -912,7 +925,9 @@ function readParams() {
               parseInt(document.getElementById('ssaa').value, 10) || 1));
   const adaptive = Math.max(1, Math.min(16,
               parseInt(document.getElementById('adaptive').value, 10) || 1));
-  return { method, methodIdx, h, maxIter, tol, W, H, ss, adaptive,
+  const shading = Math.max(0, Math.min(1,
+              parseFloat(document.getElementById('shading').value) || 0));
+  return { method, methodIdx, h, maxIter, tol, W, H, ss, adaptive, shading,
            coeffs, derv, roots, rootColors, view: { ...view } };
 }
 
@@ -940,6 +955,7 @@ function setGLUniforms(params, W, H, ss) {
   gl.uniform1i(u.uMaxIter, Math.min(maxIter, 2000));
   gl.uniform1f(u.uTol2, tol * tol);
   gl.uniform1i(u.uSS, ss);
+  gl.uniform1f(u.uShading, params.shading);
 
   const MAX_DEG = 16;
   const polyArr = new Float32Array((MAX_DEG + 1) * 2);
@@ -1496,7 +1512,7 @@ document.getElementById('zoom-out').addEventListener('click', () => {
 document.getElementById('render-btn').addEventListener('click', render);
 
 // Re-render automatically on most control changes
-['method','poly-preset','step-size','max-iter','tol-exp','resolution','custom-roots','ssaa','adaptive']
+['method','poly-preset','step-size','max-iter','tol-exp','resolution','custom-roots','ssaa','adaptive','shading']
   .forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('change', () => { if (!anim.running) render(); });
