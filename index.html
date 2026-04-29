@@ -56,7 +56,28 @@
   .slider-row input[type="range"] { flex: 1; }
   .slider-row span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px; color: var(--text); min-width: 52px; text-align: right; }
-  #status { font-size: 12px; color: var(--muted); min-height: 16px; }
+  #status { font-size: 12px; color: var(--muted); min-height: 16px; line-height: 1.4; }
+  /* Sticky header at the top of the controls panel: holds the prominent
+     Render button plus a live status line + busy indicator. */
+  .control-header { position: sticky; top: -14px;
+    margin: -14px -14px 0; padding: 12px 14px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    z-index: 5; display: flex; flex-direction: column; gap: 8px; }
+  .control-header button { font-size: 14px; padding: 11px 14px; }
+  .status-row { display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--muted); min-height: 16px; }
+  .busy-dot { width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0;
+    opacity: 0; transition: opacity 0.15s; }
+  body.is-busy .busy-dot { opacity: 1;
+    animation: busy-pulse 1s ease-in-out infinite; }
+  @keyframes busy-pulse {
+    0%, 100% { transform: scale(0.85); opacity: 0.55; }
+    50%      { transform: scale(1.20); opacity: 1.00; }
+  }
+  /* Recording / capture mode: red destructive button */
+  button.danger { background: #d8483a; color: #fff; }
+  button.danger:hover { background: #e85a4d; }
   #legend { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
   #legend .item { display: flex; align-items: center; gap: 8px; }
   #legend .swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
@@ -89,6 +110,14 @@
   </section>
 
   <aside>
+    <div class="control-header">
+      <button id="render-btn">Render</button>
+      <div class="status-row">
+        <span class="busy-dot" aria-hidden="true"></span>
+        <span id="status">Ready.</span>
+      </div>
+    </div>
+
     <fieldset>
       <div class="label">Polynomial p(z)</div>
       <select id="poly-preset">
@@ -247,9 +276,6 @@
       <small class="hint">Recording is two-phase: first every frame is rendered as fast as the GPU manages (this can take a while when h is in the unstable regime — many pixels fail to converge and run the full max-iter), then the cached frames are played back through the encoder at a steady fps. Video duration is always exactly the chosen <i>duration</i>, regardless of per-frame render time. Output is WebM (or MP4 in Safari).</small>
     </fieldset>
 
-    <button id="render-btn">Render</button>
-
-    <div id="status"></div>
     <div id="legend"></div>
 
     <details>
@@ -846,6 +872,47 @@ function setEngineStatus(msg) {
 }
 
 function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+// ---------- Busy indicator (pulsing dot in the control header) ----------
+// Counter-based so nested callers (recordVideo → render → render → …) compose
+// correctly: outer caller sets busy, inner render() pushes/pops, dot stays on.
+let _busyDepth = 0;
+function setBusy(busy) {
+  _busyDepth = Math.max(0, _busyDepth + (busy ? 1 : -1));
+  document.body.classList.toggle('is-busy', _busyDepth > 0);
+}
+
+// ---------- Filename builder: encode current settings into the filename so
+//            you can tell at a glance what generated each export. ----------
+function sanitize(s) { return String(s).replace(/[^A-Za-z0-9._-]+/g, '-'); }
+function fmtH(v) { return Number(v).toFixed(2); }
+function exportSlug(kind /* 'video' | 'frames' | 'frame' */) {
+  const polyKey = document.getElementById('poly-preset').value;
+  const method  = document.getElementById('method').value;
+  let resStr;
+  if (kind === 'frame') {
+    resStr = document.getElementById('resolution').value + 'px';
+  } else {
+    const recRes = document.getElementById('record-resolution').value;
+    resStr = (recRes === 'match' ? document.getElementById('resolution').value : recRes) + 'px';
+  }
+  let suffix = '';
+  if (kind === 'frame') {
+    const h = parseFloat(document.getElementById('step-size').value).toFixed(3);
+    suffix = `_h${h}`;
+  } else {
+    const h0 = fmtH(document.getElementById('h-start').value);
+    const h1 = fmtH(document.getElementById('h-end').value);
+    const mode = document.getElementById('anim-mode').value;
+    suffix = `_h${h0}-${h1}_${mode}`;
+    if (kind === 'video') {
+      const fps = document.getElementById('record-fps').value;
+      suffix += `_${fps}fps`;
+    }
+  }
+  return sanitize(`cayley_${polyKey}_${method}${suffix}_${resStr}`);
+}
+
 function setHudView() {
   document.getElementById('hud-view').textContent =
     `[${view.xmin.toFixed(3)}, ${view.xmax.toFixed(3)}] × [${view.ymin.toFixed(3)}, ${view.ymax.toFixed(3)}]`;
@@ -1089,6 +1156,11 @@ async function render() {
   await Promise.resolve();
   const myState = { abort: false };
   renderState = myState;
+  setBusy(true);
+  try { return await _renderInner(myState); }
+  finally { setBusy(false); }
+}
+async function _renderInner(myState) {
 
   const enginePref = document.getElementById('engine').value;
   const engineUsed = ensureEngine(enginePref);
@@ -1211,6 +1283,29 @@ scrub.addEventListener('mouseup',    () => { anim.scrubbing = false; });
 scrub.addEventListener('touchend',   () => { anim.scrubbing = false; });
 scrub.addEventListener('input',      scrubToCurrent);
 
+// ---------- Cancellation token shared by recordVideo and captureFrames ----------
+let exportRun = null;   // { kind: 'video'|'frames', aborted: boolean } | null
+function setExportButtons(kind /* 'video'|'frames'|null */) {
+  const recBtn = document.getElementById('record-video');
+  const capBtn = document.getElementById('capture-frames');
+  if (kind === 'video') {
+    recBtn.textContent = '■ Cancel recording';
+    recBtn.classList.remove('secondary'); recBtn.classList.add('danger');
+    capBtn.disabled = true;
+  } else if (kind === 'frames') {
+    capBtn.textContent = '■ Cancel capture';
+    capBtn.classList.remove('secondary'); capBtn.classList.add('danger');
+    recBtn.disabled = true;
+  } else {
+    recBtn.textContent = '⬤ Record video';
+    recBtn.classList.add('secondary'); recBtn.classList.remove('danger');
+    capBtn.textContent = 'Frames → ZIP';
+    capBtn.classList.add('secondary'); capBtn.classList.remove('danger');
+    recBtn.disabled = false; capBtn.disabled = false;
+  }
+}
+function isAborted() { return exportRun && exportRun.aborted; }
+
 // ---------- Frame capture (animation → ZIP of PNGs) ----------
 async function captureFrames() {
   if (anim.running) stopAnim();
@@ -1218,19 +1313,21 @@ async function captureFrames() {
   const fps = 24;
   const numFrames = Math.max(2, Math.round(duration * fps));
   const W = parseInt(document.getElementById('resolution').value, 10);
-  const captureBtn = document.getElementById('capture-frames');
-  captureBtn.disabled = true;
+
+  exportRun = { kind: 'frames', aborted: false };
+  setExportButtons('frames');
+  setBusy(true);
   setStatus(`Capturing ${numFrames} frames at ${W}×${W}…`);
   const files = [];
   try {
     for (let i = 0; i < numFrames; i++) {
+      if (isAborted()) break;
       const phase = (mode === 'loop')
         ? (function(){ const c = (2*i / numFrames) % 2; return c < 1 ? c : 2 - c; })()
         : (mode === 'forward' ? i / numFrames : i / Math.max(1, numFrames - 1));
       const h = h0 + phase * (h1 - h0);
       setHFromValue(h);
       await render();
-      // Ensure WebGL framebuffer is available for toBlob; preserveDrawingBuffer is set.
       const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
       const bytes = new Uint8Array(await blob.arrayBuffer());
       files.push({ name: `frame_${String(i).padStart(4,'0')}.png`, data: bytes });
@@ -1239,15 +1336,21 @@ async function captureFrames() {
         await new Promise(r => setTimeout(r, 0));
       }
     }
+    if (isAborted()) {
+      setStatus(`Cancelled after ${files.length} frame${files.length === 1 ? '' : 's'}.`);
+      return;
+    }
     setStatus('Building ZIP…');
     const zipBlob = buildZip(files);
-    downloadBlob(zipBlob, `cayley_frames_${Date.now()}.zip`);
+    downloadBlob(zipBlob, `${exportSlug('frames')}.zip`);
     setStatus(`Saved ZIP with ${numFrames} frames (${(zipBlob.size/1e6).toFixed(1)} MB).`);
   } catch (e) {
     console.error(e);
     setStatus('Capture failed: ' + e.message);
   } finally {
-    captureBtn.disabled = false;
+    exportRun = null;
+    setExportButtons(null);
+    setBusy(false);
   }
 }
 // ---------- Record animation as video (WebM / MP4) ----------
@@ -1299,8 +1402,9 @@ async function recordVideo() {
     resolutionChanged = true;
   }
 
-  const btn = document.getElementById('record-video');
-  btn.disabled = true;
+  exportRun = { kind: 'video', aborted: false };
+  setExportButtons('video');
+  setBusy(true);
   let chunks = [];
 
   try {
@@ -1314,6 +1418,7 @@ async function recordVideo() {
     const tPreStart = performance.now();
     const blobs = [];
     for (let i = 0; i < numFrames; i++) {
+      if (isAborted()) break;
       const phase = _phaseAtIndex(i, numFrames, mode);
       const h = h0 + phase * (h1 - h0);
       setHFromValue(h);
@@ -1330,6 +1435,10 @@ async function recordVideo() {
         scrubLabel.textContent = `h=${h.toFixed(3)}`;
         await new Promise(r => setTimeout(r, 0));   // yield to UI
       }
+    }
+    if (isAborted()) {
+      setStatus(`Cancelled after ${blobs.length} frame${blobs.length === 1 ? '' : 's'}.`);
+      return;
     }
     const totalSize = blobs.reduce((s, b) => s + b.size, 0);
     setStatus(`Pre-render done in ${((performance.now()-tPreStart)/1000).toFixed(1)}s ` +
@@ -1362,11 +1471,11 @@ async function recordVideo() {
     recorder.start();
     const tStart = performance.now();
     for (let i = 0; i < numFrames; i++) {
+      if (isAborted()) break;
       const bitmap = await createImageBitmap(blobs[i]);
       pctx.drawImage(bitmap, 0, 0);
       bitmap.close();
 
-      // Wait until this frame's slot has elapsed in real time.
       const target = tStart + (i + 1) * frameMs;
       const sleep = target - performance.now();
       if (sleep > 0) await new Promise(r => setTimeout(r, sleep));
@@ -1378,24 +1487,27 @@ async function recordVideo() {
     recorder.stop();
     await stopped;
     stream.getTracks().forEach(t => t.stop());
+
+    if (isAborted()) {
+      setStatus('Recording cancelled.');
+      return;
+    }
+
+    const blob = new Blob(chunks, { type: mimeType });
+    downloadBlob(blob, `${exportSlug('video')}.${ext}`);
+    setStatus(`Saved ${ext.toUpperCase()} (${(blob.size/1e6).toFixed(1)} MB, ` +
+              `${duration.toFixed(1)}s, ${numFrames} frames @ ${fps} fps).`);
   } catch (e) {
     console.error(e);
     setStatus('Recording error: ' + e.message);
-    btn.disabled = false;
-    if (resolutionChanged) { previewResEl.value = previewResValue; await render(); }
-    return;
   } finally {
-    btn.disabled = false;
-  }
-
-  const blob = new Blob(chunks, { type: mimeType });
-  downloadBlob(blob, `cayley_anim_${Date.now()}.${ext}`);
-  setStatus(`Saved ${ext.toUpperCase()} (${(blob.size/1e6).toFixed(1)} MB, ` +
-            `${duration.toFixed(1)}s, ${numFrames} frames @ ${fps} fps).`);
-
-  if (resolutionChanged) {
-    previewResEl.value = previewResValue;
-    await render();
+    exportRun = null;
+    setExportButtons(null);
+    setBusy(false);
+    if (resolutionChanged) {
+      previewResEl.value = previewResValue;
+      await render();
+    }
   }
 }
 
@@ -1660,8 +1772,14 @@ window.addEventListener('keydown', e => {
 // ---------- Animation buttons ----------
 playBtn.addEventListener('click', startAnim);
 document.getElementById('anim-stop').addEventListener('click', stopAnim);
-document.getElementById('capture-frames').addEventListener('click', captureFrames);
-document.getElementById('record-video').addEventListener('click', recordVideo);
+document.getElementById('capture-frames').addEventListener('click', () => {
+  if (exportRun && exportRun.kind === 'frames') exportRun.aborted = true;
+  else if (!exportRun) captureFrames();
+});
+document.getElementById('record-video').addEventListener('click', () => {
+  if (exportRun && exportRun.kind === 'video') exportRun.aborted = true;
+  else if (!exportRun) recordVideo();
+});
 
 // ---------- Initial wiring & first render ----------
 window.addEventListener('load', async () => {
